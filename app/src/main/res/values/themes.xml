@@ -1,0 +1,13 @@
+<resources>
+    <!-- Base application theme -->
+    <style name="Theme.VIPBinaryAIProMax" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#0B0F19</item>
+        <item name="android:navigationBarColor">#0B0F19</item>
+        <item name="android:windowBackground">#0B0F19</item>
+    </style>
+
+    <style name="Theme.VIPBinaryAIProMax.FullScreen" parent="Theme.VIPBinaryAIProMax">
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
+</resources>

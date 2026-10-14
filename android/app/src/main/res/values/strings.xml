@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">VIP Binary AI Pro Max</string>
+    <string name="title_activity_main">VIP Binary AI Pro Max</string>
+    <string name="package_name">com.vipbinary.aipro</string>
+    <string name="custom_url_scheme">com.vipbinary.aipro</string>
+</resources>
