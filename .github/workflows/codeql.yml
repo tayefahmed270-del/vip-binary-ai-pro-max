@@ -72,6 +72,15 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
+      - name: Upload Android APK
+        if: matrix.language == 'java-kotlin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TRADER-BN-FX-PRO-APK
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
         with:
