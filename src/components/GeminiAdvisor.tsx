@@ -58,6 +58,10 @@ export const GeminiAdvisor: React.FC<GeminiAdvisorProps> = ({
 
   const runAnalysis = async () => {
     if (isRunningRef.current) return;
+    if (!navigator.onLine || candles.length < 30 || Date.now() - candles[candles.length - 1].time * 1000 > Math.max(180000, (timeframe === '5m' ? 300 : 60) * 2000)) {
+      setAnalysis({ action: 'WAIT', confidence: 0, expiration: timeframe.toUpperCase(), reasoning: ['যাচাইকৃত ও নতুন লাইভ ডেটা পাওয়া যায়নি।'], martingaleAdvice: 'Do not trade without verified live data.', sentiment: 'Data unavailable', bengaliSummary: 'লাইভ ডেটা নেই বা পুরোনো। বিশ্লেষণ বন্ধ রাখা হয়েছে.', source: 'LIVE_DATA_GUARD' });
+      return;
+    }
     isRunningRef.current = true;
     setLoading(true);
     setAnalysis(null);
@@ -104,6 +108,7 @@ export const GeminiAdvisor: React.FC<GeminiAdvisorProps> = ({
             language,
             calibratedProbability: algorithmicSignal.confidence,
             algorithmicDecision: algorithmicSignal.decision,
+            candleTimestamp: candles[candles.length - 1].time * 1000,
           }),
         });
         clearTimeout(timeoutId);
@@ -120,8 +125,9 @@ export const GeminiAdvisor: React.FC<GeminiAdvisorProps> = ({
       const totalElapsed = Number((performance.now() - runStartTime).toFixed(2));
       setCurrentExecutionTime(totalElapsed);
 
-      const action = (aiData?.action as 'CALL' | 'PUT' | 'WAIT') || algorithmicSignal.decision;
-      const confidence = aiData?.confidence || algorithmicSignal.confidence;
+      // AI is explanatory only. It cannot override the live-data-validated indicator decision.
+      const action = algorithmicSignal.decision;
+      const confidence = algorithmicSignal.confidence;
 
       const resultPayload: AiAnalysisResult = {
         action,
@@ -153,7 +159,12 @@ export const GeminiAdvisor: React.FC<GeminiAdvisorProps> = ({
       const totalElapsed = Number((performance.now() - runStartTime).toFixed(2));
       setCurrentExecutionTime(totalElapsed);
 
-      // Deterministic recovery
+      // Fail closed if connectivity/data freshness changed during analysis.
+      if (!navigator.onLine || candles.length < 30 || Date.now() - candles[candles.length - 1].time * 1000 > Math.max(180000, (timeframe === '5m' ? 300 : 60) * 2000)) {
+        setAnalysis({ action: 'WAIT', confidence: 0, expiration: timeframe.toUpperCase(), reasoning: ['Live data unavailable or stale.'], martingaleAdvice: 'Do not trade.', sentiment: 'Data unavailable', bengaliSummary: 'লাইভ ডেটা পাওয়া যায়নি।', source: 'LIVE_DATA_GUARD' });
+        return;
+      }
+      // Deterministic indicator analysis is permitted only from fresh live candles.
       const localSig = evaluateConfluenceEngine(asset, candles, timeframe, 75);
       setAnalysis({
         action: localSig.decision,
@@ -184,6 +195,10 @@ export const GeminiAdvisor: React.FC<GeminiAdvisorProps> = ({
   const handleCustomSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userQuery.trim() || customLoading) return;
+    if (!navigator.onLine || candles.length < 30 || Date.now() - candles[candles.length - 1].time * 1000 > Math.max(180000, (timeframe === '5m' ? 300 : 60) * 2000)) {
+      setCustomAnswer(language === 'bn' ? 'লাইভ ডেটা সংযোগ নেই বা পুরোনো। অনলাইনে যাচাইকৃত ডেটা ছাড়া বিশ্লেষণ বন্ধ।' : 'Live data is unavailable or stale. Analysis is blocked until fresh data is verified.');
+      return;
+    }
     setCustomLoading(true);
     try {
       const res = await fetch('/api/ai-analysis', {
@@ -191,22 +206,32 @@ export const GeminiAdvisor: React.FC<GeminiAdvisorProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           asset: asset.name,
+          marketType: asset.marketType,
+          provider: asset.provider,
           timeframe,
-          candlestickPattern: `Custom User Query: ${userQuery}`,
+          currentPrice: candles[candles.length - 1].close,
+          trend: 'UNSPECIFIED',
+          rsi: evaluateConfluenceEngine(asset, candles, timeframe, 75).indicators.rsi14,
+          emaFast: evaluateConfluenceEngine(asset, candles, timeframe, 75).indicators.ema9,
+          emaSlow: evaluateConfluenceEngine(asset, candles, timeframe, 75).indicators.ema20,
+          candlestickPattern: `User question: ${userQuery}`,
           language,
+          algorithmicDecision: 'WAIT',
+          candleTimestamp: candles[candles.length - 1].time * 1000,
         }),
       });
+      if (!res.ok) throw new Error('Live AI interpretation unavailable');
       const data = await res.json();
       setCustomAnswer(
         language === 'bn' && data.bengaliSummary
-          ? `${data.bengaliSummary}\n\nসিদ্ধান্ত: ${data.action} (${data.confidence}% কনফিডেন্স)`
-          : `AI Strategy Verdict: ${data.action} with ${data.confidence}% confidence.\nNotes: ${data.reasoning?.join(' ')}`
+          ? `${data.bengaliSummary}\n\n${(data.reasoning || []).join(' ')}`
+          : `Verified-feed interpretation only.\n${(data.reasoning || []).join(' ')}`
       );
     } catch (err) {
       setCustomAnswer(
         language === 'bn'
-          ? 'বর্তমান মার্কেট ভোলাটিলিটি অনুযায়ী কনফার্মেশন ক্যান্ডেল ক্লোজ হওয়া পর্যন্ত অপেক্ষা করা শ্রেয়।'
-          : 'Observe support/resistance boundary tests before committing. Wait for next candle close.'
+          ? 'লাইভ ফিড বা AI সংযোগ যাচাই করা যায়নি। কোনো অনুমানভিত্তিক বিশ্লেষণ দেখানো হয়নি।'
+          : 'Live feed or AI connection could not be verified. No guessed analysis was shown.'
       );
     } finally {
       setCustomLoading(false);
