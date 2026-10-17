@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = Number(process.env.PORT) || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '6mb' }));
 
 // Initialize Gemini SDK safely
 let ai: GoogleGenAI | null = null;
@@ -149,6 +149,104 @@ Output strictly valid JSON. No markdown ticks.`;
   } catch (error: any) {
     console.warn('AI analysis timed out or failed, using algorithmic fallback:', error?.message);
     res.json(buildAlgorithmicResponse(`Deterministic engine fallback (${error?.message || 'Fast response safeguard'})`));
+  }
+});
+
+
+// User-consented screenshot analysis. Image-only analysis never issues a trade signal.
+app.post('/api/screen-analysis', async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!process.env.GEMINI_API_KEY || !ai) {
+      res.status(503).json({
+        success: false,
+        action: 'WAIT',
+        confidence: 0,
+        message: 'Gemini API is not configured. No signal generated.'
+      });
+      return;
+    }
+
+    const { imageBase64, mimeType = 'image/png' } = req.body || {};
+
+    if (
+      typeof imageBase64 !== 'string' ||
+      !['image/png', 'image/jpeg', 'image/webp'].includes(mimeType)
+    ) {
+      res.status(400).json({
+        success: false,
+        action: 'WAIT',
+        message: 'Provide a PNG, JPEG, or WebP screenshot.'
+      });
+      return;
+    }
+
+    const cleanBase64 = imageBase64.replace(/^data:image\/(?:png|jpeg|webp);base64,/, '');
+    if (
+      cleanBase64.length < 100 ||
+      cleanBase64.length > 5_000_000 ||
+      !/^[A-Za-z0-9+/]+={0,2}$/.test(cleanBase64)
+    ) {
+      res.status(413).json({
+        success: false,
+        action: 'WAIT',
+        message: 'Screenshot is empty, invalid, or too large.'
+      });
+      return;
+    }
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: [{
+        role: 'user',
+        parts: [
+          {
+            text: `Analyze this user-provided trading chart screenshot.
+Only describe visible evidence: chart direction, visible candle patterns,
+readable indicators, asset/timeframe if legible, and image quality.
+Do not invent prices, indicators, market data, or unseen details.
+A screenshot alone cannot verify live market data or calibrated win probability.
+Therefore action MUST be "WAIT" and confidence MUST be 0.
+Return strict JSON with keys:
+{"action":"WAIT","confidence":0,"asset":"string or unknown",
+"timeframe":"string or unknown","trend":"string or unknown",
+"visiblePatterns":["..."],"visibleIndicators":["..."],
+"imageQuality":"clear, partial, or unreadable",
+"reasoning":["..."],"bengaliSummary":"concise Bangla explanation"}`
+          },
+          {
+            inlineData: {
+              mimeType,
+              data: cleanBase64
+            }
+          }
+        ]
+      }],
+      config: { responseMimeType: 'application/json' }
+    });
+
+    const result = JSON.parse(response.text || '{}');
+    res.json({
+      success: true,
+      action: 'WAIT',
+      confidence: 0,
+      asset: result.asset || 'unknown',
+      timeframe: result.timeframe || 'unknown',
+      trend: result.trend || 'unknown',
+      visiblePatterns: Array.isArray(result.visiblePatterns) ? result.visiblePatterns : [],
+      visibleIndicators: Array.isArray(result.visibleIndicators) ? result.visibleIndicators : [],
+      imageQuality: result.imageQuality || 'unknown',
+      reasoning: Array.isArray(result.reasoning) ? result.reasoning : [],
+      bengaliSummary: result.bengaliSummary || 'শুধু স্ক্রিনশট থেকে নির্ভরযোগ্য ট্রেড সিগন্যাল নিশ্চিত করা যায় না।',
+      source: 'GEMINI_SCREENSHOT_ANALYSIS'
+    });
+  } catch (error: any) {
+    console.error('Screen analysis failed:', error?.message || 'Unknown error');
+    res.status(502).json({
+      success: false,
+      action: 'WAIT',
+      confidence: 0,
+      message: 'Screen analysis failed. No signal generated.'
+    });
   }
 });
 

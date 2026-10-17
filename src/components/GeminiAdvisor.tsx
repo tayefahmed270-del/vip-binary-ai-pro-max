@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { registerPlugin } from '@capacitor/core';
 import { AssetPair, Candle, Language, StageTimings, VipSignal } from '../types/trading';
 import { evaluateConfluenceEngine } from '../utils/indicators';
 import { sound } from '../utils/audio';
@@ -17,6 +18,12 @@ import {
   TrendingDown,
   PauseCircle,
 } from 'lucide-react';
+
+interface ScreenCapturePluginType {
+  requestPermission(): Promise<{ granted: boolean; message?: string }>;
+  getLatestScreenshot(): Promise<{ mimeType: string; imageBase64: string }>;
+}
+const ScreenCapture = registerPlugin<ScreenCapturePluginType>('ScreenCapture');
 
 interface GeminiAdvisorProps {
   asset: AssetPair;
@@ -52,9 +59,77 @@ export const GeminiAdvisor: React.FC<GeminiAdvisorProps> = ({
   const [userQuery, setUserQuery] = useState('');
   const [customAnswer, setCustomAnswer] = useState<string | null>(null);
   const [customLoading, setCustomLoading] = useState(false);
+  const [screenCaptureMessage, setScreenCaptureMessage] = useState('');
+  const [screenCaptureLoading, setScreenCaptureLoading] = useState(false);
+  const [screenAnalysisLoading, setScreenAnalysisLoading] = useState(false);
+  const [screenAnalysisResult, setScreenAnalysisResult] = useState<any>(null);
 
   // Lock to prevent duplicate concurrent runs
   const isRunningRef = useRef<boolean>(false);
+
+  const requestScreenCapturePermission = async () => {
+    setScreenCaptureLoading(true);
+    setScreenCaptureMessage(
+      language === 'bn' ? 'অনুমতির জন্য অপেক্ষা করুন...' : 'Waiting for permission...'
+    );
+    try {
+      const result = await ScreenCapture.requestPermission();
+      setScreenCaptureMessage(
+        result.message || (
+          result.granted
+            ? (language === 'bn' ? 'অনুমতি দেওয়া হয়েছে।' : 'Permission granted.')
+            : (language === 'bn' ? 'অনুমতি দেওয়া হয়নি।' : 'Permission denied.')
+        )
+      );
+    } catch {
+      setScreenCaptureMessage(
+        language === 'bn'
+          ? 'স্ক্রিন ক্যাপচার চালু করা যায়নি।'
+          : 'Could not start screen capture.'
+      );
+    } finally {
+      setScreenCaptureLoading(false);
+    }
+  };
+
+  const analyzeCapturedScreen = async () => {
+    if (screenAnalysisLoading) return;
+    if (!navigator.onLine) {
+      setScreenCaptureMessage(language === 'bn' ? 'ইন্টারনেট নেই। স্ক্রিনশট পাঠানো হয়নি।' : 'Offline. Screenshot was not sent.');
+      return;
+    }
+    if (!window.confirm(language === 'bn'
+      ? 'বর্তমান স্ক্রিনশটটি কনফিগার করা AI সার্ভারে পাঠাবেন? স্ক্রিনে ব্যক্তিগত তথ্য থাকতে পারে।'
+      : 'Send the captured screenshot to the configured AI server? It may contain personal information.')) return;
+
+    setScreenAnalysisLoading(true);
+    setScreenAnalysisResult(null);
+    try {
+      const shot = await ScreenCapture.getLatestScreenshot();
+      const response = await fetch('/api/screen-analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: shot.imageBase64,
+          mimeType: shot.mimeType,
+          asset: asset.name,
+          timeframe,
+          language
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) throw new Error(data.message || 'Screenshot analysis failed');
+      setScreenAnalysisResult({ ...data, action: 'WAIT', confidence: 0 });
+      setScreenCaptureMessage(language === 'bn' ? 'স্ক্রিনশট বিশ্লেষণ হয়েছে; এটি ট্রেড সিগন্যাল নয়।' : 'Screenshot review complete; this is not a trade signal.');
+    } catch {
+      setScreenAnalysisResult(null);
+      setScreenCaptureMessage(language === 'bn'
+        ? 'স্ক্রিনশট পড়া বা AI বিশ্লেষণ ব্যর্থ হয়েছে। কোনো সিগন্যাল তৈরি হয়নি।'
+        : 'Screenshot or AI analysis failed. No signal was generated.');
+    } finally {
+      setScreenAnalysisLoading(false);
+    }
+  };
 
   const runAnalysis = async () => {
     if (isRunningRef.current) return;
@@ -310,6 +385,58 @@ export const GeminiAdvisor: React.FC<GeminiAdvisorProps> = ({
               : 'Run Ultra-Fast Analysis (< 5s)'}
           </span>
         </button>
+      </div>
+
+      <div className="flex flex-col items-start gap-2">
+        <button
+          type="button"
+          onClick={requestScreenCapturePermission}
+          disabled={screenCaptureLoading}
+          className="px-5 py-3 rounded-xl bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 text-white font-bold text-xs"
+        >
+          {screenCaptureLoading
+            ? (language === 'bn' ? 'অপেক্ষা করুন...' : 'Please wait...')
+            : (language === 'bn' ? 'Quotex স্ক্রিন অনুমতি' : 'Quotex Screen Permission')}
+        </button>
+        {screenCaptureMessage && (
+          <p role="status" className="text-xs text-slate-300">
+            {screenCaptureMessage}
+          </p>
+        )}
+      </div>
+
+      {/* User-consented screenshot analysis */}
+      <div className="p-5 rounded-2xl bg-slate-950 border border-cyan-900/60 space-y-3">
+        <p className="text-xs text-slate-300">
+          {language === 'bn'
+            ? 'আগে Quotex স্ক্রিন ক্যাপচার অনুমতি দিন। এরপর নিচের বাটনে চাপলে ক্যাপচার করা ছবিটি AI সার্ভারে পাঠানো হবে।'
+            : 'Grant screen-capture permission first. Press below to send the captured image to the AI server.'}
+        </p>
+        <button type="button" onClick={analyzeCapturedScreen}
+          disabled={screenAnalysisLoading || screenCaptureLoading}
+          className="px-5 py-3 rounded-xl bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 text-white font-bold text-xs">
+          {screenAnalysisLoading
+            ? (language === 'bn' ? 'বিশ্লেষণ হচ্ছে...' : 'Analyzing screenshot...')
+            : (language === 'bn' ? 'ক্যাপচার করা স্ক্রিনশট বিশ্লেষণ' : 'Analyze Captured Screenshot')}
+        </button>
+        {screenAnalysisResult && (
+          <div className="p-4 rounded-xl bg-slate-900 border border-amber-800/60 space-y-2 text-xs text-slate-200">
+            <p className="font-bold text-amber-300">{language === 'bn' ? 'সিদ্ধান্ত: WAIT — ট্রেড সিগন্যাল নয়' : 'Decision: WAIT — Not a trade signal'}</p>
+            <p>{screenAnalysisResult.bengaliSummary || screenAnalysisResult.message || 'স্ক্রিনশট থেকে নিশ্চিত সিগন্যাল পাওয়া যায়নি।'}</p>
+            <p>{language === 'bn' ? 'প্রবণতা:' : 'Trend:'} {screenAnalysisResult.trend || 'unknown'}</p>
+            <p>{language === 'bn' ? 'ছবির মান:' : 'Image quality:'} {screenAnalysisResult.imageQuality || 'unknown'}</p>
+            {Array.isArray(screenAnalysisResult.visiblePatterns) && screenAnalysisResult.visiblePatterns.length > 0 && (
+              <p>{language === 'bn' ? 'দৃশ্যমান প্যাটার্ন:' : 'Visible patterns:'} {screenAnalysisResult.visiblePatterns.join(', ')}</p>
+            )}
+            {Array.isArray(screenAnalysisResult.visibleIndicators) && screenAnalysisResult.visibleIndicators.length > 0 && (
+              <p>{language === 'bn' ? 'দৃশ্যমান ইন্ডিকেটর:' : 'Visible indicators:'} {screenAnalysisResult.visibleIndicators.join(', ')}</p>
+            )}
+            {Array.isArray(screenAnalysisResult.reasoning) && screenAnalysisResult.reasoning.length > 0 && (
+              <ul className="list-disc pl-5">{screenAnalysisResult.reasoning.map((item: string, i: number) => <li key={i}>{item}</li>)}</ul>
+            )}
+            <p className="text-amber-300">{language === 'bn' ? 'শুধু স্ক্রিনশট দিয়ে লাইভ ডেটা বা জয়ের সম্ভাবনা যাচাই করা যায় না।' : 'A screenshot alone cannot verify live data or probability of winning.'}</p>
+          </div>
+        )}
       </div>
 
       {/* Analysis Result Card */}

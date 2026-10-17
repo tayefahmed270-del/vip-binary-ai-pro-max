@@ -288,39 +288,8 @@ export default function App() {
     return () => clearInterval(checkInterval);
   }, [activeTrades, candles, selectedAsset.basePrice]);
 
-  // Automated VIP signal scan (every 45s)
-  useEffect(() => {
-    const signalInterval = setInterval(() => {
-      const targetAsset = Math.random() > 0.4 ? selectedAsset : availableAssets[Math.floor(Math.random() * availableAssets.length)] || selectedAsset;
-      const targetCandles = targetAsset.id === selectedAsset.id ? candles : generateInitialCandles(targetAsset, 60, 40);
-      const newSig = generateVipSignal(targetAsset, targetCandles, '1M', 75);
+// Automated 45-second signal scan disabled; use manual analysis buttons.
 
-      sound.playSignalAlert();
-      sound.speakSignalResult(newSig, language);
-
-      setSignals((prev) => {
-        const updatedOld = prev.map((s) => (s.status === 'ACTIVE' ? { ...s, status: Math.random() > 0.15 ? 'WON' : 'LOST' } as VipSignal : s));
-        return [newSig, ...updatedOld.slice(0, 19)];
-      });
-
-      // Update diagnostic metrics with latest signal telemetry
-      setMetrics((m) => ({
-        ...m,
-        lastDecision: newSig.decision,
-        calibratedProbability: newSig.confidence,
-        exactReasonForWait: newSig.waitReason,
-        bengaliReasonForWait: newSig.bengaliWaitReason,
-        totalAnalysisDurationMs: newSig.stageTimings.totalElapsedMs,
-        signalScore: {
-          bullish: newSig.scores.bullishScore,
-          bearish: newSig.scores.bearishScore,
-          net: newSig.scores.netBias,
-        },
-      }));
-    }, 45000);
-
-    return () => clearInterval(signalInterval);
-  }, [candles, selectedAsset, availableAssets, language]);
 
   // Place Trade handler
   const handlePlaceTrade = useCallback(
